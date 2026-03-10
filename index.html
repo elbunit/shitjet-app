@@ -219,7 +219,6 @@
       case 'dashboard': renderDashboard(); break;
       case 'shito': renderFormaShitjes(); break;
       case 'shitjet': renderShitjet(); break;
-      case 'produktet': renderProduktet(); break;
       case 'punetoret': renderPunetoret(); break;
       case 'raporte': renderRaporte(); break;
     }
@@ -248,7 +247,6 @@
         <div class="stat-card accent"><div class="stat-icon">💰</div><div class="stat-info"><span class="stat-val">${formatMoney(totalSot)}</span><span class="stat-label">Shitjet Sot</span></div></div>
         <div class="stat-card"><div class="stat-icon">📅</div><div class="stat-info"><span class="stat-val">${formatMoney(totalMuaj)}</span><span class="stat-label">Këtë Muaj</span></div></div>
         <div class="stat-card"><div class="stat-icon">🧾</div><div class="stat-info"><span class="stat-val">${shitjetSot.length}</span><span class="stat-label">Fatura Sot</span></div></div>
-        <div class="stat-card"><div class="stat-icon">📦</div><div class="stat-info"><span class="stat-val">${produktet.length}</span><span class="stat-label">Produkte</span></div></div>
       </div>
       <div class="chart-section">
         <div class="section-title">7 Ditët e Fundit</div>
@@ -263,19 +261,17 @@
   }
 
   function renderFormaShitjes() {
-    const opts = produktet.map(p=>`<option value="${p.emri}" data-cmimi="${p.cmimi}" data-njesia="${p.njesia||'cop'}">${p.emri} — ${formatMoney(p.cmimi)}/${p.njesia||'cop'}</option>`).join('');
     const sot = new Date().toISOString().split('T')[0];
     document.getElementById('content').innerHTML = `
       <div class="page-header"><h1 class="page-title">Shitje e Re</h1></div>
       <div class="form-card">
-        <div class="form-group"><label>Produkti</label>
-          <select id="s-produkti" onchange="vendosCmimin()" ${!produktet.length?'disabled':''}>
-            <option value="">— Zgjidh produktin —</option>${opts}
-          </select>${!produktet.length?'<span class="hint">⚠️ Admini duhet të shtojë produkte fillimisht</span>':''}
+        <div class="form-group"><label>Emri i Produktit / Shërbimit</label>
+          <input type="text" id="s-produkti" placeholder="p.sh. Kafe, Bukë, Qumësht..." autocomplete="off">
         </div>
         <div class="form-row">
           <div class="form-group"><label>Sasia</label><input type="number" id="s-sasia" min="0.01" step="0.01" value="1" oninput="llogaritTotal()"></div>
-          <div class="form-group"><label>Çmimi (€)</label><input type="number" id="s-cmimi" min="0" step="0.01" value="0" oninput="llogaritTotal()"></div>
+          <div class="form-group"><label>Çmimi (€)</label><input type="number" id="s-cmimi" min="0" step="0.01" placeholder="0.00" oninput="llogaritTotal()"></div>
+          <div class="form-group"><label>Njësia</label><input type="text" id="s-njesia" placeholder="cop, kg, l..."></div>
         </div>
         <div class="form-group"><label>Data</label><input type="date" id="s-data" value="${sot}"></div>
         <div class="form-group"><label>Shënim (opsional)</label><input type="text" id="s-shen" placeholder="p.sh. Klienti: Agimi..."></div>
@@ -283,12 +279,6 @@
         <button class="btn-primary" onclick="ruajShitjen()">💾 Ruaj Shitjen</button>
       </div>`;
   }
-
-  window.vendosCmimin = () => {
-    const sel = document.getElementById('s-produkti');
-    const opt = sel.options[sel.selectedIndex];
-    if (opt?.dataset.cmimi) { document.getElementById('s-cmimi').value = opt.dataset.cmimi; llogaritTotal(); }
-  };
 
   window.llogaritTotal = () => {
     const s = parseFloat(document.getElementById('s-sasia')?.value)||0;
@@ -298,16 +288,15 @@
   };
 
   window.ruajShitjen = async () => {
-    const produkti = document.getElementById('s-produkti').value;
+    const produkti = document.getElementById('s-produkti').value.trim();
     const sasia = parseFloat(document.getElementById('s-sasia').value);
     const cmimi = parseFloat(document.getElementById('s-cmimi').value);
+    const njesia = document.getElementById('s-njesia').value.trim() || 'cop';
     const data = document.getElementById('s-data').value;
     const shen = document.getElementById('s-shen').value;
-    if (!produkti) return tregogabim("Zgjidh produktin!");
+    if (!produkti) return tregogabim("Shkruaj emrin e produktit!");
     if (!sasia||sasia<=0) return tregogabim("Sasia duhet > 0!");
     if (!cmimi||cmimi<=0) return tregogabim("Çmimi duhet > 0!");
-    const sel = document.getElementById('s-produkti');
-    const njesia = sel.options[sel.selectedIndex]?.dataset.njesia||'cop';
     await shtoShitje({ produkti, sasia, cmimi, njesia, data, shen, total: sasia*cmimi });
   };
 
@@ -595,7 +584,6 @@
     <div class="nav-item active" data-view="dashboard" onclick="shkoTe('dashboard')"><span class="nav-icon">🏠</span><span>Ballina</span></div>
     <div class="nav-item" data-view="shito" onclick="shkoTe('shito')"><span class="nav-icon">➕</span><span>Shitje e Re</span></div>
     <div class="nav-item" data-view="shitjet" onclick="shkoTe('shitjet')"><span class="nav-icon">🧾</span><span>Shitjet</span></div>
-    <div class="nav-item" data-view="produktet" onclick="shkoTe('produktet')"><span class="nav-icon">📦</span><span>Produktet</span></div>
     <div class="nav-item" id="nav-punetoret" data-view="punetoret" onclick="shkoTe('punetoret')" style="display:none"><span class="nav-icon">👥</span><span>Punëtorët</span></div>
     <div class="nav-item" id="nav-raporte" data-view="raporte" onclick="shkoTe('raporte')" style="display:none"><span class="nav-icon">📊</span><span>Raporte</span></div>
     <div class="sidebar-footer">
