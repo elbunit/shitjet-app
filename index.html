@@ -3,13 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ShitjetPro — Sistemi i Shitjeve</title>
+<title>DOHA Accessories</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getAuth, signInWithPopup, GoogleAuthProvider, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
   import { getFirestore, collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, updateDoc, serverTimestamp, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyARmBXSgjkjm9tVZDZL2hV52DtoikbZMKs",
@@ -23,6 +24,7 @@
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db = getFirestore(app);
+  const storage = getStorage(app);
   const googleProvider = new GoogleAuthProvider();
 
   let currentUser = null;
@@ -256,7 +258,7 @@
       </div>
       <div class="recent-section">
         <div class="section-header"><div class="section-title">Shitjet e Fundit</div><button class="link-btn" onclick="shkoTe('shitjet')">Shiko të gjitha →</button></div>
-        ${shitjet.slice(0,5).map(s=>`<div class="shitje-row"><div class="shitje-info"><strong>${s.produkti}</strong><span>${s.data} • ${s.sasia} ${s.njesia||'cop'} • <span class="punetor-tag">👤 ${s.punetori||'—'}</span></span></div><div class="shitje-total">${formatMoney(s.total)}</div></div>`).join('')||'<div class="empty-state">Nuk ka shitje ende.</div>'}
+        ${shitjet.slice(0,5).map(s=>`<div class="shitje-row">${s.fotoUrl?`<img src="${s.fotoUrl}" class="shitje-foto">`:''}<div class="shitje-info"><strong>${s.produkti}</strong><span>${s.data} • ${s.sasia} ${s.njesia||'cop'} • <span class="punetor-tag">👤 ${s.punetori||'—'}</span></span></div><div class="shitje-total">${formatMoney(s.total)}</div></div>`).join('')||'<div class="empty-state">Nuk ka shitje ende.</div>'}
       </div>`;
   }
 
@@ -275,10 +277,42 @@
         </div>
         <div class="form-group"><label>Data</label><input type="date" id="s-data" value="${sot}"></div>
         <div class="form-group"><label>Shënim (opsional)</label><input type="text" id="s-shen" placeholder="p.sh. Klienti: Agimi..."></div>
+        <div class="form-group">
+          <label>Foto (opsionale)</label>
+          <div class="foto-upload-zone" onclick="document.getElementById('s-foto').click()">
+            <input type="file" id="s-foto" accept="image/*" capture="environment" style="display:none" onchange="shfaqPreview(this)">
+            <div id="foto-preview-wrap">
+              <span class="foto-icon">📷</span>
+              <span class="foto-hint">Kliko për të ngarkuar foto ose bëj foto me kamerë</span>
+            </div>
+          </div>
+        </div>
         <div class="total-preview"><span>Totali:</span><strong id="total-preview">€ 0.00</strong></div>
-        <button class="btn-primary" onclick="ruajShitjen()">💾 Ruaj Shitjen</button>
+        <button class="btn-primary" id="btn-ruaj" onclick="ruajShitjen()">💾 Ruaj Shitjen</button>
       </div>`;
   }
+
+  window.shfaqPreview = (input) => {
+    if (!input.files || !input.files[0]) return;
+    const file = input.files[0];
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      document.getElementById('foto-preview-wrap').innerHTML = `
+        <img src="${e.target.result}" style="width:100%;max-height:200px;object-fit:cover;border-radius:8px;">
+        <button type="button" onclick="hiqFoton(event)" style="margin-top:8px;background:none;border:1px solid var(--error);color:var(--error);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;">✕ Hiq foton</button>
+      `;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  window.hiqFoton = (e) => {
+    e.stopPropagation();
+    document.getElementById('s-foto').value = '';
+    document.getElementById('foto-preview-wrap').innerHTML = `
+      <span class="foto-icon">📷</span>
+      <span class="foto-hint">Kliko për të ngarkuar foto ose bëj foto me kamerë</span>
+    `;
+  };
 
   window.llogaritTotal = () => {
     const s = parseFloat(document.getElementById('s-sasia')?.value)||0;
@@ -297,7 +331,30 @@
     if (!produkti) return tregogabim("Shkruaj emrin e produktit!");
     if (!sasia||sasia<=0) return tregogabim("Sasia duhet > 0!");
     if (!cmimi||cmimi<=0) return tregogabim("Çmimi duhet > 0!");
-    await shtoShitje({ produkti, sasia, cmimi, njesia, data, shen, total: sasia*cmimi });
+
+    const btn = document.getElementById('btn-ruaj');
+    btn.textContent = '⏳ Duke ruajtur...';
+    btn.disabled = true;
+
+    let fotoUrl = '';
+    const fotoInput = document.getElementById('s-foto');
+    if (fotoInput.files && fotoInput.files[0]) {
+      try {
+        const file = fotoInput.files[0];
+        const ext = file.name.split('.').pop();
+        const fotoRef = ref(storage, `foto/${currentUser.uid}_${Date.now()}.${ext}`);
+        await uploadBytes(fotoRef, file);
+        fotoUrl = await getDownloadURL(fotoRef);
+      } catch(e) {
+        tregogabim("Gabim ngarkimit të fotos: " + e.message);
+        btn.textContent = '💾 Ruaj Shitjen';
+        btn.disabled = false;
+        return;
+      }
+    }
+    await shtoShitje({ produkti, sasia, cmimi, njesia, data, shen, total: sasia*cmimi, fotoUrl });
+    btn.textContent = '💾 Ruaj Shitjen';
+    btn.disabled = false;
   };
 
   function renderShitjet() {
@@ -410,6 +467,14 @@
         </div>
       </div>`;
   }
+
+  window.shfaqFotoTe = (url) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:pointer;';
+    overlay.innerHTML = `<img src="${url}" style="max-width:90vw;max-height:90vh;border-radius:12px;object-fit:contain;">`;
+    overlay.onclick = () => document.body.removeChild(overlay);
+    document.body.appendChild(overlay);
+  };
 
   function formatMoney(v){return '€ '+(v||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
   function formatDate(str){const d=new Date(str+'T12:00:00');return d.toLocaleDateString('sq',{weekday:'long',year:'numeric',month:'long',day:'numeric'});}
@@ -536,6 +601,12 @@
   .progress-bar{position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--border);border-radius:2px;}
   .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;}
   .empty-state{padding:28px;text-align:center;color:var(--text2);font-size:14px;}
+  .foto-upload-zone{border:2px dashed var(--border);border-radius:12px;padding:24px;text-align:center;cursor:pointer;transition:border-color 0.2s;background:var(--bg3);}
+  .foto-upload-zone:hover{border-color:var(--accent);}
+  .foto-icon{font-size:32px;display:block;margin-bottom:8px;}
+  .foto-hint{font-size:13px;color:var(--text2);}
+  .shitje-foto{width:52px;height:52px;object-fit:cover;border-radius:8px;cursor:pointer;flex-shrink:0;border:1px solid var(--border);transition:transform 0.15s;}
+  .shitje-foto:hover{transform:scale(1.05);}
   .toast{position:fixed;bottom:24px;right:24px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:13px 18px;font-size:14px;font-weight:500;transform:translateY(80px);opacity:0;transition:all 0.3s;z-index:9999;max-width:300px;}
   .toast.show{transform:translateY(0);opacity:1;}
   .toast.success{border-color:var(--success);color:var(--success);}
@@ -555,8 +626,8 @@
 <body>
 
 <div id="login-screen">
-  <div class="login-logo">ShitjetPro</div>
-  <div class="login-tagline">Sistemi i Menaxhimit të Shitjeve</div>
+  <div class="login-logo">DOHA</div>
+  <div class="login-tagline">Accessories</div>
   <div class="login-card">
     <div class="tabs">
       <button class="tab-btn active" id="tab-admin" onclick="switchTab('admin')">👑 Admin</button>
@@ -580,7 +651,7 @@
 
 <div id="app-screen" style="display:none">
   <nav class="sidebar">
-    <div class="logo">ShitjetPro<small>sistemi i shitjeve</small></div>
+    <div class="logo">DOHA<small>Accessories</small></div>
     <div class="nav-item active" data-view="dashboard" onclick="shkoTe('dashboard')"><span class="nav-icon">🏠</span><span>Ballina</span></div>
     <div class="nav-item" data-view="shito" onclick="shkoTe('shito')"><span class="nav-icon">➕</span><span>Shitje e Re</span></div>
     <div class="nav-item" data-view="shitjet" onclick="shkoTe('shitjet')"><span class="nav-icon">🧾</span><span>Shitjet</span></div>
