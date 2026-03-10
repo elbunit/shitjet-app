@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<html lang="sq">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DOHA Accessories</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import { getFirestore, collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, updateDoc, serverTimestamp, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyARmBXSgjkjm9tVZDZL2hV52DtoikbZMKs",
+    authDomain: "doha-shitje.firebaseapp.com",
+    projectId: "doha-shitje",
+    storageBucket: "doha-shitje.firebasestorage.app",
+    messagingSenderId: "228963407770",
+    appId: "1:228963407770:web:77ef18bee8e9a22ec20c23"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const storage = getStorage(app);
+  const googleProvider = new GoogleAuthProvider();
+
+  // Handle redirect result pas kthimit nga Google login
+  getRedirectResult(auth).then(async (result) => {
+    if (result?.user) {
+      const email = result.user.email?.toLowerCase();
+      if (!ADMIN_EMAILS.includes(email)) {
+        await signOut(auth);
+        tregogabim("Ky Gmail nuk ka akses si admin!");
+      }
+    }
+  }).catch(e => console.warn('Redirect result:', e));
+
+  let currentUser = null;
+  let isAdmin = false;
+  let shitjet = [];
+  let produktet = [];
+  let punetoret = [];
+  let klientet = [];
+  let currentView = 'dashboard';
+  let editingProdId = null;
+  let unsubShitjet = null;
+
+  // =====================================================
+  // AUTENTIKIMI
+  // =====================================================
+  const ADMIN_EMAILS = [
+    'elbunit.r@gmail.com',
+    'mselmani70@gmail.com',
+    'boldmedia.ks@gmail.com'
+  ];
+
+  window.hyrSiAdmin = async () => {
+    try {
+      const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+      if (isMobile) {
+        await signInWithRedirect(auth, googleProvider);
+      } else {
+        const result = await signInWithPopup(auth, googleProvider);
+        const email = result.user.email?.toLowerCase();
+        if (!ADMIN_EMAILS.includes(email)) {
+          await signOut(auth);
+          tregogabim("Ky Gmail nuk ka akses si admin!");
+          return;
+        }
+      }
+    } catch(e) { tregogabim("Gabim gjatë hyrjes: " + e.message); }
+  };
+
+  window.hyrSiPunetor = async () => {
+    const username = document.getElementById('login-user').value.trim();
+    const password = document.getElementById('login-pass').value.trim();
+    if (!username || !password) return tregogabim("Plotëso të gjitha fushat!");
+    try {
+      const email = username.toLowerCase() + '@doha-shitje.app';
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch(e) {
+      tregogabim("Username ose fjalëkalimi i gabuar!");
+    }
+  };
+
+  window.daleMe = async () => {
+    if (unsubShitjet) unsubShitjet();
+    await signOut(auth);
+  };
+
+  onAuthStateChanged(auth, async (user) => {
+    currentUser = user;
+    if (user) {
+      isAdmin = ADMIN_EMAILS.includes(user.email?.toLowerCase());
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app-screen').style.display = 'flex';
+      const displayName = isAdmin ? (user.displayName?.split(' ')[0] || 'Admin') : user.email?.split('@')[0] || 'Punëtor';
+      document.getElementById('user-name').textContent = displayName;
+      document.getElementById('user-avatar-text').textContent = displayName[0].toUpperCase();
+      document.getElementById('user-avatar-text-desktop').textContent = displayName[0].toUpperCase();
+      document.getElementById('role-badge').textContent = isAdmin ? '👑 Admin' : '👤 Punëtor';
+      document.getElementById('role-badge-desktop').textContent = isAdmin ? '👑 Admin' : '👤 Punëtor';
+      await ngarkoTeDhenat();
+      filloBiserimin();
+      document.getElementById('nav-punetoret').style.display = isAdmin ? 'flex' : 'none';
+      document.getElementById('nav-raporte').style.display = isAdmin ? 'flex' : 'none';
+      document.getElementById('nav-galeria').style.display = isAdmin ? 'flex' : 'none';
+      document.getElementById('nav-backup').style.display = isAdmin ? 'flex' : 'none';
+      document.getElementById('nav-menaxhimi').style.display = isAdmin ? 'flex' : 'none';
+      document.getElementById('nav-klientet').style.display = isAdmin ? 'flex' : 'none';
+      shkoTe('dashboard');
+    } else {
+      if (unsubShitjet) { unsubShitjet(); unsubShitjet = null; }
+      document.getElementById('login-screen').style.display = 'flex';
+      document.getElementById('app-screen').style.display = 'none';
+    }
+  });
+
+  // =====================================================
+  // FIRESTORE
+  // =====================================================
+  async function ngarkoTeDhenat() {
+    try {
+      const [snapP, snapPun] = await Promise.all([
+        getDocs(query(collection(db, 'produktet'), orderBy('emri'))),
+        isAdmin ? getDocs(collection(db, 'punetoret')) : Promise.resolve({ docs: [] })
+      ]);
+      produktet = snapP.docs.map(d => ({ id: d.id, ...d.data() }));
+      punetoret = snapPun.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch(e) { tregogabim("Gabim ngarkimit: " + e.message); }
+  }
+
+  function filloBiserimin() {
+    if (unsubShitjet) unsubShitjet();
+    const q = query(collection(db, 'shitjet'), orderBy('krijuar', 'desc'));
+    unsubShitjet = onSnapshot(q, (snap) => {
+      shitjet = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (currentView === 'dashboard') renderDashboard();
+      if (currentView === 'shitjet') renderShitjet();
+      if (currentView === 'raporte') renderRaporte();
+    });
+  }
+
+  const TG_TOKEN = '8627336914:AAF-SNxjFLW_2k8-lzLnZ82be5BzGNV-T90';
+  const TG_CHAT  = '147150791';
+
+  async function dergoBotTelegram(teksti) {
+    try {
+      await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: TG_CHAT, text: teksti, parse_mode: 'HTML' })
+      });
+    } catch(e) { console.warn('Telegram gabim:', e); }
+  }
+
+  window.shtoShitje = async (data) => {
+    try {
+      const punetorEmri = isAdmin ? 'Admin' : (currentUser.email?.split('@')[0] || 'Punëtor');
+      await addDoc(collection(db, 'shitjet'), { ...data, punetori: punetorEmri, punetoriUid: currentUser.uid, krijuar: serverTimestamp() });
+      tregosuksese("Shitja u ruajt! ✓");
+
+      // Njoftim Telegram
+      const msg = `🛍️ <b>Shitje e Re — DOHA Accessories</b>
+
+📦 <b>Produkt:</b> ${data.produkti}
+🔢 <b>Sasia:</b> ${data.sasia} ${data.njesia||'cop'}
+💰 <b>Çmimi:</b> €${data.cmimi}
+💵 <b>Total:</b> €${data.total.toFixed(2)}
+👤 <b>Punëtori:</b> ${punetorEmri}
+📅 <b>Data:</b> ${data.data}${data.shen ? '
+📝 <b>Shënim:</b> ' + data.shen : ''}`;
+      await dergoBotTelegram(msg);
+
+      shkoTe('shitjet');
+    } catch(e) { tregogabim("Gabim: " + e.message); }
+  };
+
+  window.fshijShitje = async (id) => {
+    if (!isAdmin) return tregogabim("Vetëm admini mund të fshijë!");
+    if (!confirm("A jeni i sigurt?")) return;
+    try { await deleteDoc(doc(db, 'shitjet', id)); tregosuksese("U fshi!"); }
+    catch(e) { tregogabim("Gabim: " + e.message); }
+  };
+
+  window.shtoProd = async (data) => {
+    if (!isAdmin) return;
+    try {
+      if (editingProdId) {
+        await updateDoc(doc(db, 'produktet', editingProdId), data);
+        const idx = produktet.findIndex(p => p.id === editingProdId);
+        if (idx !== -1) produktet[idx] = { id: editingProdId, ...data };
+        editingProdId = null;
+        tregosuksese("U përditësua! ✓");
+      } else {
+        const ref = await addDoc(collection(db, 'produktet'), data);
+        produktet.push({ id: ref.id, ...data });
+        tregosuksese("U shtua! ✓");
+      }
+      renderProduktet();
+    } catch(e) { tregogabim("Gabim: " + e.message); }
+  };
+
+  window.fshijProd = async (id) => {
+    if (!isAdmin || !confirm("A jeni i sigurt?")) return;
+    try {
+      await deleteDoc(doc(db, 'produktet', id));
+      produktet = produktet.filter(p => p.id !== id);
+      tregosuksese("U fshi!"); renderProduktet();
+    } catch(e) { tregogabim("Gabim: " + e.message); }
+  };
+
+  window.redaktoProd = (id) => {
+    const p = produktet.find(x => x.id === id); if (!p) return;
+    editingProdId = id;
+    document.getElementById('prod-emri').value = p.emri;
+    document.getElementById('prod-cmimi').value = p.cmimi;
+    document.getElementById('prod-njesia').value = p.njesia || '';
+    document.getElementById('prod-btn').textContent = '💾 Përditëso';
+    document.getElementById('prod-cancel').style.display = 'inline-block';
+  };
+
+  window.anuloProd = () => {
+    editingProdId = null;
+    document.getElementById('prod-form').reset();
+    document.getElementById('prod-btn').textContent = '+ Shto';
+    document.getElementById('prod-cancel').style.display = 'none';
+  };
+
+  window.shtoPunetor = async () => {
+    const emri = document.getElementById('pun-emri').value.trim();
+    const username = document.getElementById('pun-user').value.trim().toLowerCase();
+    const password = document.getElementById('pun-pass').value.trim();
+    if (!emri || !username || !password) return tregogabim("Plotëso të gjitha fushat!");
+    if (password.length < 6) return tregogabim("Fjalëkalimi min. 6 karaktere!");
+    if (!/^[a-z0-9]+$/.test(username)) return tregogabim("Username: vetëm shkronja dhe numra!");
+    try {
+      const email = username + '@doha-shitje.app';
+      const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=AIzaSyARmBXSgjkjm9tVZDZL2hV52DtoikbZMKs`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, displayName: emri, returnSecureToken: true })
+      });
+      const data = await res.json();
+      if (data.error) {
+        if (data.error.message === 'EMAIL_EXISTS') return tregogabim("Ky username ekziston tashmë!");
+        return tregogabim("Gabim: " + data.error.message);
+      }
+      await setDoc(doc(db, 'punetoret', data.localId), { emri, username, email, uid: data.localId, krijuar: new Date().toISOString() });
+      punetoret.push({ id: data.localId, emri, username, uid: data.localId });
+      tregosuksese(`Punëtori "${emri}" u shtua! ✓`);
+      document.getElementById('pun-form').reset();
+      renderPunetoret();
+    } catch(e) { tregogabim("Gabim: " + e.message); }
+  };
+
+  window.fshijPunetor = async (id) => {
+    if (!confirm("A jeni i sigurt?")) return;
+    try {
+      await deleteDoc(doc(db, 'punetoret', id));
+      punetoret = punetoret.filter(p => p.id !== id);
+      tregosuksese("U fshi!"); renderPunetoret();
+    } catch(e) { tregogabim("Gabim: " + e.message); }
+  };
+
+  // =====================================================
+  // VIEWS
+  // =====================================================
+  window.shkoTe = (view) => {
+    currentView = view;
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelector(`[data-view="${view}"]`)?.classList.add('active');
+    switch(view) {
+      case 'dashboard': renderDashboard(); break;
+      case 'shito': renderFormaShitjes(); break;
+      case 'shitjet': renderShitjet(); break;
+      case 'punetoret': renderPunetoret(); break;
+      case 'raporte': renderRaporte(); break;
+      case 'galeria': renderGaleria(); break;
+      case 'backup': renderBackup(); break;
+      case 'menaxhimi': renderMenaxhimi(); break;
+      case 'klientet': renderKlientet(); break;
+      case 'profili': renderProfili(); break;
+    }
+  };
+
+  function renderDashboard() {
+    const sot = new Date();
+    const sotStr = sot.toISOString().split('T')[0];
+    const shitjetSot = shitjet.filter(s => s.data === sotStr);
+    const totalSot = shitjetSot.reduce((a,s) => a+(s.total||0), 0);
+    const muajiKy = sot.getMonth(), vitiKy = sot.getFullYear();
+    const totalMuaj = shitjet.filter(s => { const d = new Date(s.data); return d.getMonth()===muajiKy && d.getFullYear()===vitiKy; }).reduce((a,s) => a+(s.total||0), 0);
+    const chart7 = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate()-i);
+      const dStr = d.toISOString().split('T')[0];
+      chart7.push({ label: d.toLocaleDateString('sq', {weekday:'short'}), total: shitjet.filter(s=>s.data===dStr).reduce((a,s)=>a+(s.total||0),0) });
+    }
+    const maxVal = Math.max(...chart7.map(d=>d.total), 1);
+    document.getElementById('content').innerHTML = `
+      <div class="page-header">
+        <div><h1 class="page-title">Mirë se vini, <em>${isAdmin?'Admin':currentUser.email?.split('@')[0]}</em></h1>
+        <p class="page-sub">${sot.toLocaleDateString('sq',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</p></div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card accent"><div class="stat-icon">💰</div><div class="stat-info"><span class="stat-val">${formatMoney(totalSot)}</span><span class="stat-label">Shitjet Sot</span></div></div>
+        <div class="stat-card"><div class="stat-icon">📅</div><div class="stat-info"><span class="stat-val">${formatMoney(totalMuaj)}</span><span class="stat-label">Këtë Muaj</span></div></div>
+        <div class="stat-card"><div class="stat-icon">🧾</div><div class="stat-info"><span class="stat-val">${shitjetSot.length}</span><span class="stat-label">Fatura Sot</span></div></div>
+      </div>
+      <div class="chart-section">
+        <div class="section-title">7 Ditët e Fundit</div>
+        <div class="bar-chart">
+          ${chart7.map(d=>`<div class="bar-col"><div class="bar-wrap"><div class="bar-fill" style="height:${(d.total/maxVal*100)}%">${d.total>0?`<span class="bar-tooltip">${formatMoney(d.total)}</span>`:''}</div></div><span class="bar-label">${d.label}</span></div>`).join('')}
+        </div>
+      </div>
+      <div class="recent-section">
+        <div class="section-header"><div class="section-title">Shitjet e Fundit</div><button class="link-btn" onclick="shkoTe('shitjet')">Shiko të gjitha →</button></div>
+        ${(isAdmin ? shitjet : shitjet.filter(s=>s.data===sotStr)).slice(0,5).map(s=>`<div class="shitje-row">${s.fotoUrl?`<img src="${s.fotoUrl}" class="shitje-foto">`:''}<div class="shitje-info"><strong>${s.produkti}</strong><span>${s.data} • ${s.sasia} ${s.njesia||'cop'} • <span class="punetor-tag">👤 ${s.punetori||'—'}</span></span></div><div class="shitje-total">${formatMoney(s.total)}</div></div>`).join('')||'<div class="empty-state">Nuk ka shitje sot.</div>'}
+      </div>`;
+  }
+
+  function renderFormaShitjes() {
+    const sot = new Date().toISOString().split('T')[0];
+    document.getElementById('content').innerHTML = `
+      <div class="page-header"><h1 class="page-title">Shitje e Re</h1></div>
+      <div class="form-card">
+        <div class="form-group"><label>Emri i Produktit / Shërbimit</label>
+          <input type="text" id="s-produkti" placeholder="p.sh. Byzylyk, Unazë, Vathë..." autocomplete="off">
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Sasia</label><input type="number" id="s-sasia" min="0.01" step="0.01" value="1" oninput="llogaritTotal()"></div>
+          <div class="form-group"><label>Çmimi (€)</label><input type="number" id="s-cmimi" min="0" step="0.01" placeholder="0.00" oninput="llogaritTotal()"></div>
+          <div class="form-group"><label>Njësia</label><input type="text" id="s-njesia" placeholder="cop, kg, l..."></div>
+        </div>
+        <div class="form-group"><label>Data</label><input type="date" id="s-data" value="${sot}"></div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Metoda e Pagesës</label>
+            <select id="s-pagesa">
+              <option value="cash">💵 Cash</option>
+              <option value="karte">💳 Kartë</option>
+              <option value="transfer">🏦 Transfer</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Klienti (opsional)</label>
+            <input type="text" id="s-klienti" placeholder="Emri i klientit..." autocomplete="off" list="klientet-list">
+            <datalist id="klientet-list"></datalist>
+          </div>
+        </div>
+        <div class="form-group"><label>Shënim (opsional)</label><input type="text" id="s-shen" placeholder="p.sh. Çmim special..."></div>
+        <div class="form-group">
+          <label>Foto (opsionale)</label>
+          <div class="foto-upload-zone">
+            <input type="file" id="s-foto" accept="image/*" style="display:none" onchange="shfaqPreview(this)">
+            <div id="foto-preview-wrap">
+              <span class="foto-icon">📷</span>
+              <span class="foto-hint">Zgjidh butonin për foto</span>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px;justify-content:center">
+              <button type="button" class="btn-foto" onclick="hapKameren()">📷 Kamera</button>
+              <button type="button" class="btn-foto" onclick="hapGalerine()">🖼️ Galeria</button>
+            </div>
+          </div>
+        </div>
+        <div class="total-preview"><span>Totali:</span><strong id="total-preview">€ 0.00</strong></div>
+        <button class="btn-primary" id="btn-ruaj" onclick="ruajShitjen()">💾 Ruaj Shitjen</button>
+      </div>`;
+    setTimeout(plotesoDatalistin, 50);
+  }
+
+  window.plotesoDatalistin = () => {
+    const dl = document.getElementById('klientet-list');
+    if (!dl) return;
+    const emer = [...new Set(shitjet.filter(s=>s.klienti).map(s=>s.klienti))];
+    dl.innerHTML = emer.map(e=>`<option value="${e}">`).join('');
+  };
+
+  window.shfaqPreview = (input) => {
+    if (!input.files || !input.files[0]) return;
+    const file = input.files[0];
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      document.getElementById('foto-preview-wrap').innerHTML = `
+        <img src="${e.target.result}" style="width:100%;max-height:200px;object-fit:cover;border-radius:8px;">
+        <button type="button" onclick="hiqFoton(event)" style="margin-top:8px;background:none;border:1px solid var(--error);color:var(--error);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;">✕ Hiq foton</button>
+      `;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  window.hapKameren = () => {
+    const input = document.getElementById('s-foto');
+    input.removeAttribute('capture');
+    input.setAttribute('capture', 'environment');
+    input.click();
+  };
+
+  window.hapGalerine = () => {
+    const input = document.getElementById('s-foto');
+    input.removeAttribute('capture');
+    input.click();
+  };
+
+  window.hiqFoton = (e) => {
+    e.stopPropagation();
+    document.getElementById('s-foto').value = '';
+    document.getElementById('foto-preview-wrap').innerHTML = `
+      <span class="foto-icon">📷</span>
+      <span class="foto-hint">Kliko për të ngarkuar foto ose bëj foto me kamerë</span>
+    `;
+  };
+
+  window.llogaritTotal = () => {
+    const s = parseFloat(document.getElementById('s-sasia')?.value)||0;
+    const c = parseFloat(document.getElementById('s-cmimi')?.value)||0;
+    const el = document.getElementById('total-preview');
+    if (el) el.textContent = formatMoney(s*c);
+  };
+
+  window.ruajShitjen = async () => {
+    const produkti = document.getElementById('s-produkti').value.trim();
+    const sasia = parseFloat(document.getElementById('s-sasia').value);
+    const cmimi = parseFloat(document.getElementById('s-cmimi').value);
+    const njesia = document.getElementById('s-njesia').value.trim() || 'cop';
+    const data = document.getElementById('s-data').value;
+    const shen = document.getElementById('s-shen').value;
+    const pagesa = document.getElementById('s-pagesa').value;
+    const klienti = document.getElementById('s-klienti').value.trim();
+    if (!produkti) return tregogabim("Shkruaj emrin e produktit!");
+    if (!sasia||sasia<=0) return tregogabim("Sasia duhet > 0!");
+    if (!cmimi||cmimi<=0) return tregogabim("Çmimi duhet > 0!");
+
+    const btn = document.getElementById('btn-ruaj');
+    btn.textContent = '⏳ Duke ruajtur...';
+    btn.disabled = true;
+
+    let fotoUrl = '';
+    const fotoInput = document.getElementById('s-foto');
+    if (fotoInput.files && fotoInput.files[0]) {
+      try {
+        const file = fotoInput.files[0];
+        const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+        const emriFoto = `foto/${currentUser.uid}_${Date.now()}.${ext}`;
+        const fotoRef = ref(storage, emriFoto);
+        const snapshot = await uploadBytes(fotoRef, file);
+        fotoUrl = await getDownloadURL(snapshot.ref);
+      } catch(e) {
+        // Foto deshtoi por ruaj shitjen pa foto
+        console.warn("Foto nuk u ngarkua:", e.message);
+        tregogabim("⚠️ Foto nuk u ngarkua, por shitja u ruajt!");
+      }
+    }
+    await shtoShitje({ produkti, sasia, cmimi, njesia, data, shen, pagesa, klienti, total: sasia*cmimi, fotoUrl });
+    btn.textContent = '💾 Ruaj Shitjen';
+    btn.disabled = false;
+  };
+
+  function renderShitjet() {
+    const grouped = {};
+    shitjet.forEach(s => { if (!grouped[s.data]) grouped[s.data]=[]; grouped[s.data].push(s); });
+    const rows = Object.entries(grouped).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,30);
+    document.getElementById('content').innerHTML = `
+      <div class="page-header"><h1 class="page-title">Të gjitha Shitjet</h1><button class="btn-primary small" onclick="shkoTe('shito')">+ Shitje e Re</button></div>
+      ${!rows.length?'<div class="empty-state">Nuk ka shitje ende.</div>':''}
+      ${rows.map(([data,items])=>{
+        const dayTotal = items.reduce((a,s)=>a+(s.total||0),0);
+        return `<div class="day-group"><div class="day-header"><span>${formatDate(data)}</span><span class="day-total">${formatMoney(dayTotal)}</span></div>
+          ${items.map(s=>`<div class="shitje-row"><div class="shitje-info"><strong>${s.produkti}</strong><span>${s.sasia} ${s.njesia||'cop'} × ${formatMoney(s.cmimi)} • <span class="punetor-tag">👤 ${s.punetori||'—'}</span>${s.klienti?' • 🙋 '+s.klienti:''}${s.pagesa?' • '+({cash:'💵',karte:'💳',transfer:'🏦'}[s.pagesa]||''):''}${s.shen?' • '+s.shen:''}</span></div>
+          <div style="display:flex;align-items:center;gap:10px"><div class="shitje-total">${formatMoney(s.total)}</div>${isAdmin?`<button class="del-btn" onclick="fshijShitje('${s.id}')">✕</button>`:''}</div></div>`).join('')}
+        </div>`;
+      }).join('')}`;
+  }
+
+  function renderProduktet() {
+    document.getElementById('content').innerHTML = `
+      <div class="page-header"><h1 class="page-title">Produktet</h1></div>
+      ${isAdmin?`<div class="form-card"><h3 style="margin-bottom:14px;font-size:15px;font-weight:600">Shto / Ndrysho Produkt</h3>
+        <form id="prod-form" onsubmit="event.preventDefault();ruajProd()">
+          <div class="form-row">
+            <div class="form-group"><label>Emri</label><input type="text" id="prod-emri" placeholder="p.sh. Bukë" required></div>
+            <div class="form-group"><label>Çmimi (€)</label><input type="number" id="prod-cmimi" min="0" step="0.01" placeholder="0.00" required></div>
+            <div class="form-group"><label>Njësia</label><input type="text" id="prod-njesia" placeholder="cop, kg, l..."></div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button type="submit" id="prod-btn" class="btn-primary">+ Shto</button>
+            <button type="button" id="prod-cancel" class="btn-secondary" style="display:none" onclick="anuloProd()">Anulo</button>
+          </div>
+        </form></div>`:'<div class="info-box">📦 Lista e produkteve (vetëm admini mund të ndryshojë)</div>'}
+      <div class="prod-grid">
+        ${!produktet.length?'<div class="empty-state">Nuk ka produkte.</div>':''}
+        ${produktet.map(p=>`<div class="prod-card"><div class="prod-name">${p.emri}</div><div class="prod-price">${formatMoney(p.cmimi)}<span>/${p.njesia||'cop'}</span></div>
+          ${isAdmin?`<div class="prod-actions"><button onclick="redaktoProd('${p.id}')">✏️</button><button onclick="fshijProd('${p.id}')">🗑️</button></div>`:''}</div>`).join('')}
+      </div>`;
+  }
+
+  window.ruajProd = async () => {
+    const emri = document.getElementById('prod-emri').value.trim();
+    const cmimi = parseFloat(document.getElementById('prod-cmimi').value);
+    const njesia = document.getElementById('prod-njesia').value.trim()||'cop';
+    if (!emri) return tregogabim("Shkruaj emrin!");
+    if (!cmimi||cmimi<=0) return tregogabim("Çmimi duhet > 0!");
+    await shtoProd({ emri, cmimi, njesia });
+    document.getElementById('prod-form')?.reset();
+    document.getElementById('prod-btn').textContent = '+ Shto';
+    document.getElementById('prod-cancel').style.display = 'none';
+  };
+
+  function renderPunetoret() {
+    if (!isAdmin) return;
+    document.getElementById('content').innerHTML = `
+      <div class="page-header"><h1 class="page-title">Punëtorët</h1></div>
+      <div class="form-card"><h3 style="margin-bottom:14px;font-size:15px;font-weight:600">Shto Punëtor të Ri</h3>
+        <form id="pun-form" onsubmit="event.preventDefault();shtoPunetor()">
+          <div class="form-row">
+            <div class="form-group"><label>Emri i Plotë</label><input type="text" id="pun-emri" placeholder="p.sh. Agim Berisha" required></div>
+            <div class="form-group"><label>Username</label><input type="text" id="pun-user" placeholder="p.sh. agim" required></div>
+            <div class="form-group"><label>Fjalëkalimi</label><input type="password" id="pun-pass" placeholder="min. 6 karaktere" required></div>
+          </div>
+          <button type="submit" class="btn-primary">+ Shto Punëtorin</button>
+        </form>
+      </div>
+      <div class="pun-list">
+        <div class="section-title" style="margin-bottom:12px">Punëtorët Aktiv (${punetoret.length})</div>
+        ${!punetoret.length?'<div class="empty-state">Nuk ka punëtorë ende. Shto punëtorin e parë!</div>':''}
+        ${punetoret.map(p=>`<div class="pun-row">
+          <div class="pun-avatar">${p.emri[0].toUpperCase()}</div>
+          <div class="pun-info"><strong>${p.emri}</strong><span>@${p.username}</span></div>
+          <div class="pun-stats">${shitjet.filter(s=>s.punetoriUid===p.uid).length} shitje</div>
+          <button class="del-btn" onclick="fshijPunetor('${p.id}')">✕</button>
+        </div>`).join('')}
+      </div>`;
+  }
+
+  let raporteTab = 'muaji';
+
+  function renderRaporte() {
+    if (!isAdmin) return;
+    const sot = new Date();
+    const muajiKy = sot.getMonth(), vitiKy = sot.getFullYear();
+    const muajet=['Janar','Shkurt','Mars','Prill','Maj','Qershor','Korrik','Gusht','Shtator','Tetor','Nëntor','Dhjetor'];
+    const totalGjith = shitjet.reduce((a,s)=>a+(s.total||0),0);
+
+    // === MUAJT ===
+    const byMuaj = {};
+    shitjet.forEach(s => {
+      if (!s.data) return;
+      const d = new Date(s.data+'T12:00:00');
+      const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      if (!byMuaj[key]) byMuaj[key] = { total:0, count:0, muaji: d.getMonth(), viti: d.getFullYear() };
+      byMuaj[key].total += s.total||0;
+      byMuaj[key].count++;
+    });
+    const muajteSort = Object.entries(byMuaj).sort((a,b)=>b[0].localeCompare(a[0]));
+
+    // === VITET ===
+    const byVit = {};
+    shitjet.forEach(s => {
+      if (!s.data) return;
+      const viti = new Date(s.data+'T12:00:00').getFullYear();
+      if (!byVit[viti]) byVit[viti] = { total:0, count:0 };
+      byVit[viti].total += s.total||0;
+      byVit[viti].count++;
+    });
+    const viteteSort = Object.entries(byVit).sort((a,b)=>b[0]-a[0]);
+
+    // === JAVËT ===
+    function getWeekKey(dateStr) {
+      const d = new Date(dateStr+'T12:00:00');
+      const start = new Date(d);
+      start.setDate(d.getDate() - d.getDay() + 1);
+      return start.toISOString().split('T')[0];
+    }
+    const byJava = {};
+    shitjet.forEach(s => {
+      if (!s.data) return;
+      const key = getWeekKey(s.data);
+      if (!byJava[key]) byJava[key] = { total:0, count:0, start: key };
+      byJava[key].total += s.total||0;
+      byJava[key].count++;
+    });
+    const javaSort = Object.entries(byJava).sort((a,b)=>b[0].localeCompare(a[0]));
+
+    // === TOP PRODUKTET ===
+    const byProd={};
+    shitjet.forEach(s=>{if(!byProd[s.produkti])byProd[s.produkti]={total:0,count:0};byProd[s.produkti].total+=s.total||0;byProd[s.produkti].count++;});
+    const topProd=Object.entries(byProd).sort((a,b)=>b[1].total-a[1].total).slice(0,8);
+
+    // === PUNËTORËT ===
+    const byPun={};
+    shitjet.forEach(s=>{const k=s.punetori||'—';if(!byPun[k])byPun[k]={total:0,count:0};byPun[k].total+=s.total||0;byPun[k].count++;});
+    const topPun=Object.entries(byPun).sort((a,b)=>b[1].total-a[1].total);
+
+    const tabContent = {
+      muaji: `
+        <div class="section-title" style="margin-bottom:16px">Të ardhurat sipas Muajit</div>
+        ${muajteSort.map(([key,d])=>`
+          <div class="top-row">
+            <div class="top-info"><strong>${muajet[d.muaji]} ${d.viti}</strong><span>${d.count} shitje</span></div>
+            <div class="top-total">${formatMoney(d.total)}</div>
+            <div class="progress-bar"><div class="progress-fill" style="width:${muajteSort[0][1].total>0?(d.total/muajteSort[0][1].total*100):0}%"></div></div>
+          </div>`).join('')||'<div class="empty-state">Nuk ka të dhëna.</div>'}`,
+
+      viti: `
+        <div class="section-title" style="margin-bottom:16px">Të ardhurat sipas Vitit</div>
+        ${viteteSort.map(([viti,d])=>`
+          <div class="top-row">
+            <div class="top-info"><strong>${viti}</strong><span>${d.count} shitje</span></div>
+            <div class="top-total">${formatMoney(d.total)}</div>
+            <div class="progress-bar"><div class="progress-fill" style="width:${viteteSort[0][1].total>0?(d.total/viteteSort[0][1].total*100):0}%"></div></div>
+          </div>`).join('')||'<div class="empty-state">Nuk ka të dhëna.</div>'}`,
+
+      java: `
+        <div class="section-title" style="margin-bottom:16px">Të ardhurat sipas Javës</div>
+        ${javaSort.map(([key,d])=>{
+          const dStart = new Date(key+'T12:00:00');
+          const dEnd = new Date(dStart); dEnd.setDate(dStart.getDate()+6);
+          const label = dStart.toLocaleDateString('sq',{day:'numeric',month:'short'}) + ' — ' + dEnd.toLocaleDateString('sq',{day:'numeric',month:'short',year:'numeric'});
+          return `<div class="top-row">
+            <div class="top-info"><strong>${label}</strong><span>${d.count} shitje</span></div>
+            <div class="top-total">${formatMoney(d.total)}</div>
+            <div class="progress-bar"><div class="progress-fill" style="width:${javaSort[0][1].total>0?(d.total/javaSort[0][1].total*100):0}%"></div></div>
+          </div>`;
+        }).join('')||'<div class="empty-state">Nuk ka të dhëna.</div>'}`,
+
+      produkte: `
+        <div class="section-title" style="margin-bottom:16px">Top Produktet / Shërbimet</div>
+        ${topProd.map(([emri,d],i)=>`
+          <div class="top-row">
+            <span class="rank">#${i+1}</span>
+            <div class="top-info"><strong>${emri}</strong><span>${d.count} shitje</span></div>
+            <div class="top-total">${formatMoney(d.total)}</div>
+            <div class="progress-bar"><div class="progress-fill" style="width:${topProd[0][1].total>0?(d.total/topProd[0][1].total*100):0}%"></div></div>
+          </div>`).join('')||'<div class="empty-state">Nuk ka të dhëna.</div>'}`,
+
+      punetore: `
+        <div class="section-title" style="margin-bottom:16px">Shitjet sipas Punëtorit</div>
+        ${topPun.map(([emri,d])=>`
+          <div class="top-row">
+            <div class="pun-avatar small">${emri[0]?.toUpperCase()||'?'}</div>
+            <div class="top-info"><strong>${emri}</strong><span>${d.count} shitje</span></div>
+            <div class="top-total">${formatMoney(d.total)}</div>
+            <div class="progress-bar"><div class="progress-fill" style="width:${topPun[0][1].total>0?(d.total/topPun[0][1].total*100):0}%"></div></div>
+          </div>`).join('')||'<div class="empty-state">Nuk ka të dhëna.</div>'}`
+    };
+
+    document.getElementById('content').innerHTML = `
+      <div class="page-header"><h1 class="page-title">Raporte</h1></div>
+      <div class="stats-grid">
+        <div class="stat-card accent"><div class="stat-icon">💰</div><div class="stat-info"><span class="stat-val">${formatMoney(muajteSort[0]?.[1]?.total||0)}</span><span class="stat-label">${muajet[muajiKy]} ${vitiKy}</span></div></div>
+        <div class="stat-card"><div class="stat-icon">📅</div><div class="stat-info"><span class="stat-val">${formatMoney(muajteSort[1]?.[1]?.total||0)}</span><span class="stat-label">Muaji i Kaluar</span></div></div>
+        <div class="stat-card"><div class="stat-icon">🏆</div><div class="stat-info"><span class="stat-val">${formatMoney(viteteSort[0]?.[1]?.total||0)}</span><span class="stat-label">Viti ${vitiKy}</span></div></div>
+        <div class="stat-card"><div class="stat-icon">🧾</div><div class="stat-info"><span class="stat-val">${formatMoney(totalGjith)}</span><span class="stat-label">Total Gjithsej</span></div></div>
+      </div>
+      <div class="raporte-tabs">
+        <button class="rtab ${raporteTab==='muaji'?'active':''}" onclick="switchRTab('muaji')">📅 Muajt</button>
+        <button class="rtab ${raporteTab==='viti'?'active':''}" onclick="switchRTab('viti')">📆 Vitet</button>
+        <button class="rtab ${raporteTab==='java'?'active':''}" onclick="switchRTab('java')">🗓️ Javët</button>
+        <button class="rtab ${raporteTab==='produkte'?'active':''}" onclick="switchRTab('produkte')">📦 Produktet</button>
+        <button class="rtab ${raporteTab==='punetore'?'active':''}" onclick="switchRTab('punetore')">👥 Punëtorët</button>
+      </div>
+      <div class="chart-section" id="raporte-content">
+        ${tabContent[raporteTab]}
+      </div>
+      <div class="form-card" style="margin-top:20px;border:1px solid rgba(248,113,113,0.2);background:rgba(248,113,113,0.04)">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+          <span style="font-size:24px">⚠️</span>
+          <div>
+            <div style="font-weight:700;font-size:15px">Zona e Rrezikshme</div>
+            <div style="font-size:12px;color:var(--text2);margin-top:2px">Shkarko të dhënat si Excel, pastaj fshij gjithçka nga databaza</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn-primary" onclick="shkarkoExcel()" style="background:linear-gradient(135deg,#22c55e,#16a34a)">
+            📥 Shkarko Excel
+          </button>
+          <button class="btn-secondary" onclick="fshijGjithDatabazen()" style="border-color:var(--error);color:var(--error)">
+            🗑️ Fshij të gjitha shitjet
+          </button>
+        </div>
+      </div>`;
+  }
+
+  window.switchRTab = (tab) => {
+    raporteTab = tab;
+    renderRaporte();
+  };
+
+  function renderKlientet() {
+    if (!isAdmin) return;
+    // Build client list from sales
+    const byKlient = {};
+    shitjet.forEach(s => {
+      if (!s.klienti) return;
+      const k = s.klienti.trim();
+      if (!byKlient[k]) byKlient[k] = { blerje: 0, total: 0, shitjet: [] };
+      byKlient[k].blerje++;
+      byKlient[k].total += s.total || 0;
+      byKlient[k].shitjet.push(s);
+    });
+    const lista = Object.entries(byKlient).sort((a,b) => b[1].total - a[1].total);
+
+    document.getElementById('content').innerHTML = `
+      <div class="page-header"><h1 class="page-title">Klientët</h1></div>
+      ${!lista.length ? '<div class="empty-state">Nuk ka klientë të regjistruar ende.<br>Shtoni emrin e klientit kur regjistroni shitje.</div>' : ''}
+      <div class="pun-list">
+        ${lista.map(([emri, d]) => `
+          <div class="pun-row" onclick="shfaqKlientin('${emri.replace(/'/g,"\'")}')">
+            <div class="pun-avatar">${emri[0].toUpperCase()}</div>
+            <div class="pun-info">
+              <strong>${emri}</strong>
+              <span>${d.blerje} blerje</span>
+            </div>
+            <div class="pun-stats" style="text-align:right">
+              <strong style="color:var(--success);font-size:15px">${formatMoney(d.total)}</strong>
+              <span style="display:block;font-size:11px;color:var(--text2)">total</span>
+            </div>
+            <span style="color:var(--text2);font-size:18px">›</span>
+          </div>`).join('')}
+      </div>`;
+  }
+
+  window.shfaqKlientin = (emri) => {
+    const shitjetK = shitjet.filter(s => s.klienti === emri).sort((a,b) => b.data?.localeCompare(a.data));
+    const total = shitjetK.reduce((a,s) => a+(s.total||0), 0);
+    const pagesat = {cash:'💵 Cash', karte:'💳 Kartë', transfer:'🏦 Transfer'};
+    document.getElementById('content').innerHTML = `
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">${emri}</h1>
+          <p class="page-sub">${shitjetK.length} blerje • Total: ${formatMoney(total)}</p>
+        </div>
+        <button class="btn-secondary small" onclick="shkoTe('klientet')">← Klientët</button>
+      </div>
+      <div class="day-group">
+        ${shitjetK.map(s => `
+          <div class="shitje-row">
+            ${s.fotoUrl ? `<img src="${s.fotoUrl}" class="shitje-foto" onclick="shfaqFotoTe('${s.fotoUrl}')">` : ''}
+            <div class="shitje-info">
+              <strong>${s.produkti}</strong>
+              <span>${s.data} • ${s.sasia} ${s.njesia||'cop'} • ${pagesat[s.pagesa]||'💵 Cash'}${s.shen?' • '+s.shen:''}</span>
+            </div>
+            <div class="shitje-total">${formatMoney(s.total)}</div>
+          </div>`).join('')}
+      </div>`;
+  };
+
+  function renderGaleria() {
+    if (!isAdmin) return;
+    const fotot = shitjet.filter(s => s.fotoUrl).sort((a,b) => {
+      const da = a.krijuar?.seconds||0, db2 = b.krijuar?.seconds||0;
+      return db2 - da;
+    });
+    document.getElementById('content').innerHTML = `
+      <div class="page-header"><h1 class="page-title">Galeria e Fotove</h1></div>
+      ${!fotot.length ? '<div class="empty-state">Nuk ka foto të ngarkuara ende.</div>' : ''}
+      <div class="galeria-grid">
+        ${fotot.map(s => {
+          const dataShfaq = s.krijuar?.seconds
+            ? new Date(s.krijuar.seconds*1000).toLocaleDateString('sq',{day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})
+            : (s.data || '—');
+          return `
+            <div class="galeria-card" onclick="shfaqFotoTe('${s.fotoUrl}')">
+              <img src="${s.fotoUrl}" alt="${s.produkti}" loading="lazy">
+              <div class="galeria-info">
+                <strong>${s.produkti}</strong>
+                <span>📅 ${dataShfaq}</span>
+                <span>👤 ${s.punetori||'—'} • ${formatMoney(s.total)}</span>
+              </div>
+            </div>`;
+        }).join('')}
+      </div>`;
+  }
+
+  function renderProfili() {
+    const username = isAdmin ? currentUser.displayName || 'Admin' : currentUser.email?.split('@')[0] || 'Punëtor';
+    document.getElementById('content').innerHTML = `
+      <div class="page-header"><h1 class="page-title">Profili</h1></div>
+      <div class="form-card">
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid var(--border)">
+          <div class="pun-avatar" style="width:52px;height:52px;font-size:20px">${username[0].toUpperCase()}</div>
+          <div>
+            <div style="font-size:18px;font-weight:600">${username}</div>
+            <div style="font-size:12px;color:var(--text2);margin-top:2px">${isAdmin ? '👑 Admin' : '👤 Punëtor'}</div>
+          </div>
+        </div>
+        ${!isAdmin ? `
+        <h3 style="font-size:15px;font-weight:600;margin-bottom:16px">🔑 Ndrysho Fjalëkalimin</h3>
+        <div class="form-group"><label>Fjalëkalimi i Ri</label><input type="password" id="pass-ri" placeholder="min. 6 karaktere"></div>
+        <div class="form-group"><label>Konfirmo Fjalëkalimin</label><input type="password" id="pass-konfirmo" placeholder="përsërit fjalëkalimin"></div>
+        <button class="btn-primary" onclick="ndryshoFjalekalimin()">💾 Ruaj Fjalëkalimin e Ri</button>
+        ` : '<div class="info-box">👑 Ju jeni admin — hyrja bëhet me Google Account.</div>'}
+      </div>`;
+  }
+
+  window.ndryshoFjalekalimin = async () => {
+    const { updatePassword } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+    const passRi = document.getElementById('pass-ri').value;
+    const passK = document.getElementById('pass-konfirmo').value;
+    if (!passRi || passRi.length < 6) return tregogabim("Fjalëkalimi duhet min. 6 karaktere!");
+    if (passRi !== passK) return tregogabim("Fjalëkalimet nuk përputhen!");
+    try {
+      await updatePassword(currentUser, passRi);
+      tregosuksese("Fjalëkalimi u ndryshua me sukses! ✓");
+      document.getElementById('pass-ri').value = '';
+      document.getElementById('pass-konfirmo').value = '';
+    } catch(e) {
+      if (e.code === 'auth/requires-recent-login') {
+        tregogabim("Dilni dhe hyni sërish, pastaj ndryshoni fjalëkalimin!");
+      } else {
+        tregogabim("Gabim: " + e.message);
+      }
+    }
+  };
+
+  window.shkarkoExcel = () => {
+    if (!shitjet.length) return tregogabim("Nuk ka të dhëna për të shkarkuar!");
+    const muajet = ['Janar','Shkurt','Mars','Prill','Maj','Qershor','Korrik','Gusht','Shtator','Tetor','Nëntor','Dhjetor'];
+    const pagesat = {cash:'Cash', karte:'Kartë', transfer:'Transfer'};
+
+    // Build CSV me BOM per Excel shqip
+    const rows = [
+      ['Nr.','Data','Produkti','Sasia','Njësia','Çmimi (€)','Total (€)','Pagesa','Klienti','Punëtori','Shënim']
+    ];
+    shitjet.forEach((s,i) => {
+      rows.push([
+        i+1,
+        s.data||'',
+        s.produkti||'',
+        s.sasia||0,
+        s.njesia||'cop',
+        (s.cmimi||0).toFixed(2),
+        (s.total||0).toFixed(2),
+        pagesat[s.pagesa]||'Cash',
+        s.klienti||'',
+        s.punetori||'',
+        s.shen||''
+      ]);
+    });
+    // Total row
+    const totalGjith = shitjet.reduce((a,s)=>a+(s.total||0),0);
+    rows.push(['','','','','','TOTAL:',totalGjith.toFixed(2),'','','','']);
+
+    const csv = '﻿' + rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('
+');
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const sot = new Date().toISOString().split('T')[0];
+    a.href = url;
+    a.download = `DOHA_Shitjet_${sot}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    tregosuksese("Excel u shkarkua! ✓");
+  };
+
+  window.fshijGjithDatabazen = async () => {
+    // Konfirmim i dyfishtë
+    const hapi1 = confirm("⚠️ KUJDES!\n\nA je i sigurt që dëshiron të fshish TË GJITHA shitjet nga databaza?\n\nKjo veprim NUK mund të kthehet mbrapa!");
+    if (!hapi1) return;
+    const hapi2 = confirm("🔴 KONFIRMIM FINAL\n\nJe absolutisht i sigurt?\n\nTë gjitha " + shitjet.length + " shitje do të fshihen përgjithmonë!");
+    if (!hapi2) return;
+
+    try {
+      const btn = document.querySelector('[onclick="fshijGjithDatabazen()"]');
+      if (btn) { btn.textContent = '⏳ Duke fshirë...'; btn.disabled = true; }
+
+      // Fshi çdo dokument
+      const fshijPromises = shitjet.map(s => deleteDoc(doc(db, 'shitjet', s.id)));
+      await Promise.all(fshijPromises);
+
+      tregosuksese("✓ Të gjitha shitjet u fshinë!");
+      renderRaporte();
+    } catch(e) {
+      tregogabim("Gabim gjatë fshirjes: " + e.message);
+    }
+  };
+
+  function renderMenaxhimi() {
+    if (!isAdmin) return;
+    const total = shitjet.reduce((a,s)=>a+(s.total||0),0);
+    document.getElementById('content').innerHTML = `
+      <div class="page-header"><h1 class="page-title">Menaxhimi i të Dhënave</h1></div>
+
+      <div class="form-card">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">
+          <span style="font-size:32px">📊</span>
+          <div>
+            <div style="font-size:16px;font-weight:600">Eksporto në Excel</div>
+            <div style="font-size:13px;color:var(--text2);margin-top:3px">Shkarko të gjitha shitjet si skedar Excel (.xlsx)</div>
+          </div>
+        </div>
+        <div class="stats-grid" style="margin-bottom:18px">
+          <div class="stat-card"><div class="stat-icon">🧾</div><div class="stat-info"><span class="stat-val">${shitjet.length}</span><span class="stat-label">Shitje Gjithsej</span></div></div>
+          <div class="stat-card accent"><div class="stat-icon">💰</div><div class="stat-info"><span class="stat-val">${formatMoney(total)}</span><span class="stat-label">Total Gjithsej</span></div></div>
+        </div>
+        <button class="btn-primary" onclick="exportExcel()">⬇️ Shkarko Excel</button>
+      </div>
+
+      <div class="form-card" style="border-color:rgba(248,113,113,0.3);background:rgba(248,113,113,0.04)">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">
+          <span style="font-size:32px">🗑️</span>
+          <div>
+            <div style="font-size:16px;font-weight:600;color:var(--error)">Fshij të Gjitha Shitjet</div>
+            <div style="font-size:13px;color:var(--text2);margin-top:3px">Kjo veprim është i pakthyeshëm! Rekomandohet të shkarkoni Excel-in fillimisht.</div>
+          </div>
+        </div>
+        <div class="info-box" style="background:rgba(248,113,113,0.08);border-color:rgba(248,113,113,0.3);color:var(--error)">
+          ⚠️ Do të fshihen <strong>${shitjet.length} shitje</strong> — totali <strong>${formatMoney(total)}</strong>. Ky veprim NUK mund të kthehet!
+        </div>
+        <div class="form-group" style="margin-bottom:14px">
+          <label>Shkruaj <strong>FSHIJ</strong> për të konfirmuar</label>
+          <input type="text" id="konfirmo-fshij" placeholder="Shkruaj: FSHIJ">
+        </div>
+        <button class="btn-secondary" style="border-color:var(--error);color:var(--error)" onclick="fshijGjithe()">🗑️ Fshij të Gjitha Shitjet</button>
+      </div>`;
+  }
+
+  window.exportExcel = () => {
+    if (!shitjet.length) return tregogabim("Nuk ka shitje për të eksportuar!");
+    const pagesat = {cash:'Cash', karte:'Kartë', transfer:'Transfer'};
+    // Build CSV (Excel compatible with UTF-8 BOM)
+    const headers = ['Nr','Data','Produkti','Sasia','Njesia','Cmimi (€)','Total (€)','Pagesa','Klienti','Punetori','Shenimi'];
+    const rows = shitjet
+      .sort((a,b) => a.data?.localeCompare(b.data))
+      .map((s, i) => [
+        i+1,
+        s.data||'',
+        s.produkti||'',
+        s.sasia||'',
+        s.njesia||'cop',
+        (s.cmimi||0).toFixed(2),
+        (s.total||0).toFixed(2),
+        pagesat[s.pagesa]||'Cash',
+        s.klienti||'',
+        s.punetori||'',
+        s.shen||''
+      ]);
+
+    // Add totals row
+    const totalGjith = shitjet.reduce((a,s)=>a+(s.total||0),0);
+    rows.push(['','','','','','TOTAL:',totalGjith.toFixed(2),'','','','']);
+
+    const csvContent = '﻿' + [headers, ...rows]
+      .map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(','))
+      .join('
+');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const sot = new Date().toISOString().split('T')[0];
+    a.href = url;
+    a.download = `DOHA_Accessories_Shitjet_${sot}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    tregosuksese(`✓ ${shitjet.length} shitje u eksportuan!`);
+  };
+
+  window.fshijGjithe = async () => {
+    const konfirmo = document.getElementById('konfirmo-fshij')?.value?.trim();
+    if (konfirmo !== 'FSHIJ') return tregogabim("Shkruaj saktësisht: FSHIJ");
+    if (!shitjet.length) return tregogabim("Nuk ka shitje për të fshirë!");
+
+    const btn = document.querySelector('[onclick="fshijGjithe()"]');
+    btn.textContent = '⏳ Duke fshirë...';
+    btn.disabled = true;
+
+    try {
+      // Delete all in batches
+      const promises = shitjet.map(s => deleteDoc(doc(db, 'shitjet', s.id)));
+      await Promise.all(promises);
+      tregosuksese(`✓ U fshinë të gjitha shitjet!`);
+      shkoTe('dashboard');
+    } catch(e) {
+      tregogabim("Gabim gjatë fshirjes: " + e.message);
+      btn.textContent = '🗑️ Fshij të Gjitha Shitjet';
+      btn.disabled = false;
+    }
+  };
+
+  function renderBackup() {
+    if (!isAdmin) return;
+    const totali = shitjet.reduce((a,s) => a+(s.total||0), 0);
+    document.getElementById('content').innerHTML = `
+      <div class="page-header"><h1 class="page-title">Backup & Reset</h1></div>
+
+      <div class="form-card">
+        <div class="section-title" style="margin-bottom:16px">📥 Shkarko të Dhënat</div>
+        <p style="font-size:14px;color:var(--text2);margin-bottom:20px">Shkarko të gjitha shitjet si skedar Excel para se të fshish databazën.</p>
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <button class="btn-primary" onclick="shkarkoExcel()">📊 Shkarko Excel (.csv)</button>
+        </div>
+        <div style="margin-top:16px;padding:14px;background:var(--bg3);border-radius:10px;font-size:13px;color:var(--text2)">
+          📋 <strong style="color:var(--text)">${shitjet.length} shitje</strong> — Total: <strong style="color:var(--success)">${formatMoney(totali)}</strong>
+        </div>
+      </div>
+
+      <div class="form-card" style="border-color:rgba(248,113,113,0.3);background:rgba(248,113,113,0.04)">
+        <div class="section-title" style="margin-bottom:16px;color:var(--error)">⚠️ Zona e Rrezikshme</div>
+        <p style="font-size:14px;color:var(--text2);margin-bottom:8px">Fshirja e databazës është <strong style="color:var(--error)">e pakthyeshme</strong>. Të gjitha shitjet do të fshihen përgjithmonë.</p>
+        <p style="font-size:13px;color:var(--text2);margin-bottom:20px">⬆️ Shkarko Excel-in fillimisht para fshirjes!</p>
+        <button class="btn-fshij-db" onclick="konfirmoFshirjen()">🗑️ Fshij të gjithë Databazën</button>
+      </div>`;
+  }
+
+  window.shkarkoExcel = () => {
+    if (!shitjet.length) return tregogabim("Nuk ka të dhëna për shkarkim!");
+    const pagesat = { cash: 'Cash', karte: 'Kartë', transfer: 'Transfer' };
+    const headers = ['Data', 'Produkti', 'Sasia', 'Njësia', 'Çmimi (€)', 'Total (€)', 'Metoda Pagesës', 'Klienti', 'Punëtori', 'Shënim'];
+    const rows = shitjet
+      .sort((a,b) => (b.data||'').localeCompare(a.data||''))
+      .map(s => [
+        s.data || '',
+        s.produkti || '',
+        s.sasia || '',
+        s.njesia || 'cop',
+        (s.cmimi || 0).toFixed(2),
+        (s.total || 0).toFixed(2),
+        pagesat[s.pagesa] || 'Cash',
+        s.klienti || '',
+        s.punetori || '',
+        s.shen || ''
+      ]);
+
+    // Add totals row
+    const totalSum = shitjet.reduce((a,s) => a+(s.total||0), 0);
+    rows.push(['', '', '', '', 'TOTAL:', totalSum.toFixed(2), '', '', '', '']);
+
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const sot = new Date().toISOString().split('T')[0];
+    a.href = url;
+    a.download = `DOHA_Accessories_Shitjet_${sot}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    tregosuksese("Excel u shkarkua! ✓");
+  };
+
+  window.konfirmoFshirjen = () => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+    overlay.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--error);border-radius:16px;padding:28px;max-width:380px;width:100%">
+        <div style="font-size:32px;text-align:center;margin-bottom:16px">⚠️</div>
+        <h3 style="font-size:18px;font-weight:700;text-align:center;margin-bottom:12px;color:var(--error)">Fshirje e Plotë</h3>
+        <p style="font-size:14px;color:var(--text2);text-align:center;margin-bottom:8px">Do të fshihen <strong style="color:var(--text)">${shitjet.length} shitje</strong> përgjithmonë.</p>
+        <p style="font-size:13px;color:var(--text2);text-align:center;margin-bottom:20px">Kjo veprim <strong style="color:var(--error)">nuk mund të kthehet</strong>!</p>
+        <p style="font-size:13px;color:var(--text2);text-align:center;margin-bottom:10px">Shkruaj <strong>FSHIJ</strong> për të konfirmuar:</p>
+        <input type="text" id="konfirmo-input" placeholder="Shkruaj FSHIJ" style="width:100%;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:11px 13px;color:var(--text);font-size:15px;text-align:center;font-family:'DM Sans',sans-serif;outline:none;margin-bottom:16px">
+        <div style="display:flex;gap:10px">
+          <button onclick="this.closest('div[style]').remove()" style="flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;color:var(--text);cursor:pointer;font-size:14px;font-family:'DM Sans',sans-serif">Anulo</button>
+          <button onclick="ekzekutoFshirjen()" style="flex:1;background:var(--error);border:none;border-radius:10px;padding:12px;color:#fff;cursor:pointer;font-size:14px;font-weight:700;font-family:'DM Sans',sans-serif">Fshij</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+  };
+
+  window.ekzekutoFshirjen = async () => {
+    const input = document.getElementById('konfirmo-input')?.value?.trim();
+    if (input !== 'FSHIJ') return tregogabim("Shkruaj saktë: FSHIJ");
+    document.querySelector('div[style*="z-index:9999"]')?.remove();
+    tregogabim("⏳ Duke fshirë...");
+    try {
+      const batch = [];
+      for (const s of shitjet) {
+        batch.push(deleteDoc(doc(db, 'shitjet', s.id)));
+      }
+      await Promise.all(batch);
+      tregosuksese("Databaza u fshi me sukses! ✓");
+      shkoTe('dashboard');
+    } catch(e) {
+      tregogabim("Gabim gjatë fshirjes: " + e.message);
+    }
+  };
+
+  window.toggleMenu = () => {
+    const wrap = document.getElementById('nav-wrap');
+    const btn = document.getElementById('hamburger-btn');
+    wrap.classList.toggle('open');
+    btn.textContent = wrap.classList.contains('open') ? '✕' : '☰';
+  };
+
+  window.closeMenu = () => {
+    const wrap = document.getElementById('nav-wrap');
+    const btn = document.getElementById('hamburger-btn');
+    wrap.classList.remove('open');
+    btn.textContent = '☰';
+  };
+
+  window.shfaqFotoTe = (url) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:pointer;';
+    overlay.innerHTML = `<img src="${url}" style="max-width:90vw;max-height:90vh;border-radius:12px;object-fit:contain;">`;
+    overlay.onclick = () => document.body.removeChild(overlay);
+    document.body.appendChild(overlay);
+  };
+
+  function formatMoney(v){return '€ '+(v||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
+  function formatDate(str){const d=new Date(str+'T12:00:00');return d.toLocaleDateString('sq',{weekday:'long',year:'numeric',month:'long',day:'numeric'});}
+  function tregosuksese(msg){showToast(msg,'success');}
+  function tregogabim(msg){showToast(msg,'error');}
+  function showToast(msg,type){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+type;setTimeout(()=>t.className='toast',3500);}
+  window.switchTab=(tab)=>{
+    document.getElementById('tab-admin').classList.toggle('active',tab==='admin');
+    document.getElementById('tab-punetor').classList.toggle('active',tab==='punetor');
+    document.getElementById('login-admin').style.display=tab==='admin'?'block':'none';
+    document.getElementById('login-punetor').style.display=tab==='punetor'?'block':'none';
+  };
+</script>
+
+<style>
+  :root{--bg:#0f0f13;--bg2:#16161d;--bg3:#1e1e28;--border:#2a2a38;--accent:#f0b429;--accent2:#e8832a;--text:#e8e8f0;--text2:#8888aa;--success:#3ecf8e;--error:#f87171;--radius:14px;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;}
+  #login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;padding:24px;background:radial-gradient(ellipse at 30% 20%,#1a1520 0%,#0f0f13 70%);}
+  .login-logo{font-family:'DM Serif Display',serif;font-size:48px;color:var(--accent);letter-spacing:-2px;margin-bottom:6px;}
+  .login-tagline{color:var(--text2);font-size:11px;letter-spacing:3px;text-transform:uppercase;margin-bottom:36px;}
+  .login-card{background:var(--bg2);border:1px solid var(--border);border-radius:24px;padding:30px;max-width:420px;width:100%;}
+  .tabs{display:flex;gap:0;margin-bottom:24px;background:var(--bg3);border-radius:10px;padding:4px;}
+  .tab-btn{flex:1;padding:10px;border:none;background:none;color:var(--text2);border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;transition:all 0.2s;}
+  .tab-btn.active{background:var(--bg2);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,0.3);}
+  .btn-google{width:100%;padding:13px 20px;background:white;color:#111;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:transform 0.15s;font-family:'DM Sans',sans-serif;}
+  .btn-google:hover{transform:translateY(-1px);}
+  .login-note{margin-top:14px;font-size:12px;color:var(--text2);text-align:center;}
+  #app-screen{display:none;min-height:100vh;}
+  .sidebar{width:230px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:20px 0;position:fixed;left:0;top:0;bottom:0;z-index:100;}
+  .logo{font-family:'DM Serif Display',serif;font-size:26px;color:var(--accent);padding:0 20px 20px;border-bottom:1px solid var(--border);margin-bottom:12px;}
+  .logo small{display:block;font-size:9px;color:var(--text2);font-family:'DM Sans',sans-serif;letter-spacing:2px;text-transform:uppercase;margin-top:2px;}
+  .nav-item{display:flex;align-items:center;gap:11px;padding:11px 20px;cursor:pointer;color:var(--text2);font-size:14px;font-weight:500;border-left:3px solid transparent;transition:all 0.2s;user-select:none;}
+  .nav-item:hover{background:var(--bg3);color:var(--text);}
+  .nav-item.active{background:var(--bg3);color:var(--accent);border-left-color:var(--accent);}
+  .nav-icon{font-size:17px;}
+  .sidebar-footer{margin-top:auto;padding:16px 20px;border-top:1px solid var(--border);}
+  .user-info{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+  .user-avatar-circle{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#111;flex-shrink:0;}
+  .user-details{flex:1;overflow:hidden;}
+  #user-name{font-size:13px;font-weight:600;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #role-badge{font-size:11px;color:var(--text2);}
+  .logout-btn{width:100%;padding:9px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text2);cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;transition:all 0.15s;}
+  .logout-btn:hover{border-color:var(--error);color:var(--error);}
+  .main{margin-left:230px;flex:1;padding:28px 32px;min-height:100vh;}
+  .page-header{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:24px;}
+  .page-title{font-family:'DM Serif Display',serif;font-size:34px;letter-spacing:-1px;line-height:1.1;}
+  .page-title em{color:var(--accent);font-style:italic;}
+  .page-sub{color:var(--text2);font-size:13px;margin-top:4px;}
+  .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:24px;}
+  .stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:18px;display:flex;align-items:center;gap:14px;transition:border-color 0.2s;}
+  .stat-card:hover{border-color:var(--accent);}
+  .stat-card.accent{border-color:rgba(240,180,41,0.3);background:linear-gradient(135deg,rgba(240,180,41,0.07),var(--bg2));}
+  .stat-icon{font-size:26px;}
+  .stat-info{display:flex;flex-direction:column;}
+  .stat-val{font-size:20px;font-weight:700;letter-spacing:-0.5px;}
+  .stat-label{font-size:11px;color:var(--text2);margin-top:2px;text-transform:uppercase;letter-spacing:0.5px;}
+  .chart-section{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:22px;margin-bottom:20px;}
+  .section-title{font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:16px;}
+  .bar-chart{display:flex;align-items:flex-end;gap:6px;height:110px;}
+  .bar-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;height:100%;}
+  .bar-wrap{flex:1;width:100%;display:flex;align-items:flex-end;}
+  .bar-fill{width:100%;background:linear-gradient(180deg,var(--accent),var(--accent2));border-radius:5px 5px 0 0;min-height:3px;position:relative;transition:height 0.5s ease;}
+  .bar-tooltip{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:3px 7px;font-size:10px;white-space:nowrap;display:none;z-index:10;margin-bottom:3px;}
+  .bar-fill:hover .bar-tooltip{display:block;}
+  .bar-label{font-size:10px;color:var(--text2);}
+  .recent-section,.day-group{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:14px;}
+  .section-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);}
+  .link-btn{background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;}
+  .day-header{display:flex;justify-content:space-between;align-items:center;padding:10px 18px;background:var(--bg3);font-size:12px;color:var(--text2);border-bottom:1px solid var(--border);}
+  .day-total{font-weight:700;color:var(--accent);font-size:14px;}
+  .shitje-row{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--border);transition:background 0.15s;}
+  .shitje-row:last-child{border-bottom:none;}
+  .shitje-row:hover{background:var(--bg3);}
+  .shitje-info{display:flex;flex-direction:column;}
+  .shitje-info strong{font-size:14px;font-weight:500;}
+  .shitje-info span{font-size:12px;color:var(--text2);margin-top:2px;}
+  .shitje-total{font-weight:700;font-size:15px;color:var(--success);}
+  .punetor-tag{color:var(--accent2);font-weight:500;}
+  .form-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:22px;margin-bottom:20px;}
+  .form-group{display:flex;flex-direction:column;gap:6px;flex:1;margin-bottom:14px;}
+  .form-row{display:flex;gap:14px;}
+  .form-group label{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;}
+  .form-group input,.form-group select{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:11px 13px;color:var(--text);font-size:14px;font-family:'DM Sans',sans-serif;transition:border-color 0.2s;outline:none;}
+  .form-group input:focus,.form-group select:focus{border-color:var(--accent);}
+  .form-group select option{background:var(--bg3);}
+  .hint{font-size:12px;color:var(--accent2);}
+  .total-preview{display:flex;justify-content:space-between;align-items:center;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:13px 15px;margin-bottom:14px;font-size:14px;}
+  .total-preview strong{font-size:20px;color:var(--success);}
+  .info-box{background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.2);border-radius:10px;padding:12px 16px;font-size:13px;color:var(--accent);margin-bottom:16px;}
+  .btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#111;border:none;border-radius:10px;padding:12px 22px;font-size:14px;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;transition:transform 0.15s,box-shadow 0.15s;}
+  .btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(240,180,41,0.3);}
+  .btn-primary.small{padding:9px 16px;font-size:13px;}
+  .btn-secondary{background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:12px 22px;font-size:14px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;}
+  .del-btn{background:none;border:1px solid var(--border);color:var(--text2);border-radius:6px;width:28px;height:28px;cursor:pointer;font-size:11px;transition:all 0.15s;}
+  .del-btn:hover{background:rgba(248,113,113,0.1);border-color:var(--error);color:var(--error);}
+  .prod-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;}
+  .prod-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:18px;display:flex;flex-direction:column;gap:6px;transition:border-color 0.2s;}
+  .prod-card:hover{border-color:var(--accent);}
+  .prod-name{font-weight:600;font-size:15px;}
+  .prod-price{font-size:18px;font-weight:700;color:var(--accent);}
+  .prod-price span{font-size:12px;color:var(--text2);font-weight:400;}
+  .prod-actions{display:flex;gap:6px;margin-top:4px;}
+  .prod-actions button{background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:5px 9px;cursor:pointer;font-size:13px;transition:background 0.15s;}
+  .prod-actions button:hover{background:var(--border);}
+  .pun-list{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
+  .pun-row{display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid var(--border);transition:background 0.15s;}
+  .pun-row:last-child{border-bottom:none;}
+  .pun-row:hover{background:var(--bg3);}
+  .pun-avatar{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;color:#111;flex-shrink:0;}
+  .pun-avatar.small{width:30px;height:30px;font-size:12px;}
+  .pun-info{flex:1;}
+  .pun-info strong{display:block;font-size:14px;font-weight:600;}
+  .pun-info span{font-size:12px;color:var(--text2);}
+  .pun-stats{font-size:12px;color:var(--text2);min-width:80px;text-align:right;}
+  .raporte-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .top-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);position:relative;}
+  .top-row:last-child{border-bottom:none;}
+  .rank{font-size:16px;font-weight:700;color:var(--text2);min-width:28px;}
+  .top-info{flex:1;}
+  .top-info strong{display:block;font-size:14px;}
+  .top-info span{font-size:11px;color:var(--text2);}
+  .top-total{font-weight:700;font-size:14px;color:var(--success);min-width:80px;text-align:right;}
+  .progress-bar{position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--border);border-radius:2px;}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;}
+  .empty-state{padding:28px;text-align:center;color:var(--text2);font-size:14px;}
+  .raporte-tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+  .rtab{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:9px 16px;color:var(--text2);cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;transition:all 0.2s;}
+  .rtab:hover{border-color:var(--accent);color:var(--text);}
+  .rtab.active{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#111;border-color:transparent;font-weight:700;}
+  .galeria-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;}
+  .galeria-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:border-color 0.2s,transform 0.15s;}
+  .galeria-card:hover{border-color:var(--accent);transform:translateY(-2px);}
+  .galeria-card img{width:100%;height:180px;object-fit:cover;display:block;}
+  .galeria-info{padding:12px;}
+  .galeria-info strong{display:block;font-size:14px;font-weight:600;margin-bottom:4px;}
+  .galeria-info span{display:block;font-size:11px;color:var(--text2);margin-top:2px;}
+  .foto-upload-zone{border:2px dashed var(--border);border-radius:12px;padding:20px;text-align:center;transition:border-color 0.2s;background:var(--bg3);}
+  .btn-foto{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 16px;color:var(--text);cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;transition:all 0.2s;}
+  .btn-foto:hover{border-color:var(--accent);color:var(--accent);}
+
+  .btn-fshij-db{background:none;border:2px solid var(--error);color:var(--error);border-radius:10px;padding:12px 22px;font-size:14px;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.2s;width:100%;}
+  .btn-fshij-db:hover{background:var(--error);color:#fff;}
+  .foto-icon{font-size:32px;display:block;margin-bottom:8px;}
+  .foto-hint{font-size:13px;color:var(--text2);}
+  .shitje-foto{width:52px;height:52px;object-fit:cover;border-radius:8px;cursor:pointer;flex-shrink:0;border:1px solid var(--border);transition:transform 0.15s;}
+  .shitje-foto:hover{transform:scale(1.05);}
+  .toast{position:fixed;bottom:24px;right:24px;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:13px 18px;font-size:14px;font-weight:500;transform:translateY(80px);opacity:0;transition:all 0.3s;z-index:9999;max-width:300px;}
+  .toast.show{transform:translateY(0);opacity:1;}
+  .toast.success{border-color:var(--success);color:var(--success);}
+  .toast.error{border-color:var(--error);color:var(--error);}
+  @media(max-width:768px){
+    /* Sidebar bëhet header lart me hamburger menu */
+    .sidebar{width:100%;height:56px;flex-direction:row;top:0;bottom:auto;left:0;right:0;padding:0 16px;border-right:none;border-bottom:1px solid var(--border);align-items:center;justify-content:space-between;}
+    .logo{display:flex;padding:0;border:none;margin:0;font-size:22px;align-items:center;}
+    .logo small{display:none;}
+    .sidebar-footer{display:none;}
+    /* Nav items fshihen - hapen nga hamburger */
+    .nav-items-wrap{position:fixed;top:56px;left:0;right:0;background:var(--bg2);border-bottom:1px solid var(--border);flex-direction:column;padding:8px 0;display:none;z-index:200;}
+    .nav-items-wrap.open{display:flex;}
+    .nav-item{border-left:none;border-top:none;padding:14px 20px;font-size:15px;width:100%;}
+    .nav-item span:last-child{display:inline;}
+    .nav-item.active{border-left:3px solid var(--accent);border-top:none;}
+    .hamburger{background:none;border:none;color:var(--text);font-size:24px;cursor:pointer;padding:4px 8px;display:flex;align-items:center;}
+    /* Butoni dil - shfaqet në header */
+    .mobile-dil{background:none;border:1px solid var(--border);color:var(--text2);border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap;}
+    .mobile-dil:hover{border-color:var(--error);color:var(--error);}
+    .mobile-user{display:flex;align-items:center;gap:8px;}
+    .mobile-role{font-size:11px;color:var(--text2);}
+    .main{margin-left:0;margin-top:56px;padding:16px;}
+    .form-row{flex-direction:column;}
+    .stats-grid{grid-template-columns:1fr 1fr;}
+    .raporte-grid{grid-template-columns:1fr;}
+    .page-title{font-size:26px;}
+    .toast{bottom:16px;right:16px;left:16px;max-width:100%;}
+  }
+  @media(min-width:769px){
+    .hamburger{display:none;}
+    .nav-items-wrap{display:flex;flex-direction:column;flex:1;}
+    .mobile-dil{display:none;}
+    .mobile-user{display:none;}
+  }
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <div class="login-logo">DOHA</div>
+  <div class="login-tagline">Accessories</div>
+  <div class="login-card">
+    <div class="tabs">
+      <button class="tab-btn active" id="tab-admin" onclick="switchTab('admin')">👑 Admin</button>
+      <button class="tab-btn" id="tab-punetor" onclick="switchTab('punetor')">👤 Punëtor</button>
+    </div>
+    <div id="login-admin">
+      <button class="btn-google" onclick="hyrSiAdmin()">
+        <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+        Hyr si Admin me Google
+      </button>
+      <p class="login-note">🔒 Vetëm llogaria juaj Google ka akses si admin</p>
+    </div>
+    <div id="login-punetor" style="display:none">
+      <div class="form-group"><label>Username</label><input type="text" id="login-user" placeholder="p.sh. agim" autocomplete="username"></div>
+      <div class="form-group"><label>Fjalëkalimi</label><input type="password" id="login-pass" placeholder="••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')hyrSiPunetor()"></div>
+      <button class="btn-primary" style="width:100%" onclick="hyrSiPunetor()">Hyr si Punëtor →</button>
+      <p class="login-note">Username dhe fjalëkalimin i jep admini</p>
+    </div>
+  </div>
+</div>
+
+<div id="app-screen" style="display:none">
+  <nav class="sidebar">
+    <div class="logo">DOHA<small>Accessories</small></div>
+    <!-- Mobile: emri + hamburger + dil -->
+    <div class="mobile-user">
+      <div class="user-avatar-circle" id="user-avatar-text" style="width:30px;height:30px;font-size:12px;">A</div>
+      <span id="role-badge" style="font-size:11px;color:var(--text2);">—</span>
+    </div>
+    <button class="mobile-dil" onclick="daleMe()">↩ Dil</button>
+    <button class="hamburger" onclick="toggleMenu()" id="hamburger-btn">☰</button>
+    <!-- Nav items -->
+    <div class="nav-items-wrap" id="nav-wrap">
+      <div class="nav-item active" data-view="dashboard" onclick="shkoTe('dashboard');closeMenu()"><span class="nav-icon">🏠</span><span>Ballina</span></div>
+      <div class="nav-item" data-view="shito" onclick="shkoTe('shito');closeMenu()"><span class="nav-icon">➕</span><span>Shitje e Re</span></div>
+      <div class="nav-item" data-view="shitjet" onclick="shkoTe('shitjet');closeMenu()"><span class="nav-icon">🧾</span><span>Shitjet</span></div>
+      <div class="nav-item" id="nav-punetoret" data-view="punetoret" onclick="shkoTe('punetoret');closeMenu()" style="display:none"><span class="nav-icon">👥</span><span>Punëtorët</span></div>
+      <div class="nav-item" id="nav-raporte" data-view="raporte" onclick="shkoTe('raporte');closeMenu()" style="display:none"><span class="nav-icon">📊</span><span>Raporte</span></div>
+      <div class="nav-item" id="nav-galeria" data-view="galeria" onclick="shkoTe('galeria');closeMenu()" style="display:none"><span class="nav-icon">🖼️</span><span>Galeria</span></div>
+      <div class="nav-item" id="nav-backup" data-view="backup" onclick="shkoTe('backup');closeMenu()" style="display:none"><span class="nav-icon">🗄️</span><span>Backup & Reset</span></div>
+      <div class="nav-item" id="nav-menaxhimi" data-view="menaxhimi" onclick="shkoTe('menaxhimi');closeMenu()" style="display:none"><span class="nav-icon">🗄️</span><span>Menaxhimi</span></div>
+      <div class="nav-item" id="nav-profili" data-view="profili" onclick="shkoTe('profili');closeMenu()"><span class="nav-icon">👤</span><span>Profili</span></div>
+      <div class="nav-item" id="nav-klientet" data-view="klientet" onclick="shkoTe('klientet');closeMenu()" style="display:none"><span class="nav-icon">👤</span><span>Klientët</span></div>
+      <div class="nav-item" data-view="profili" onclick="shkoTe('profili');closeMenu()"><span class="nav-icon">⚙️</span><span>Profili</span></div>
+      <!-- Desktop footer brenda nav -->
+      <div class="sidebar-footer">
+        <div class="user-info">
+          <div class="user-avatar-circle" id="user-avatar-text-desktop">A</div>
+          <div class="user-details"><span id="user-name">Përdorues</span><span id="role-badge-desktop">—</span></div>
+        </div>
+        <button class="logout-btn" onclick="daleMe()">↩ Dil nga llogaria</button>
+      </div>
+    </div>
+  </nav>
+  <main class="main"><div id="content"></div></main>
+</div>
+
+<div id="toast" class="toast"></div>
+</body>
+</html>
