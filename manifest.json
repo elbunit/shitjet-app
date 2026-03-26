@@ -1,0 +1,49 @@
+{
+  "name": "DOHA Accessories",
+  "short_name": "DOHA",
+  "description": "Sistem menaxhimi shitjesh - DOHA Accessories",
+  "start_url": "/shitjet-app/",
+  "display": "standalone",
+  "background_color": "#0f0f11",
+  "theme_color": "#f0b429",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/shitjet-app/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/shitjet-app/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Shitje e Re",
+      "short_name": "Shitje",
+      "description": "Regjistro shitje te re",
+      "url": "/shitjet-app/?shortcut=shito",
+      "icons": [{ "src": "/shitjet-app/icon-shortcut-shitje.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Arka",
+      "short_name": "Arka",
+      "description": "Hap ose barazo arken",
+      "url": "/shitjet-app/?shortcut=dashboard",
+      "icons": [{ "src": "/shitjet-app/icon-shortcut-arka.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Shpenzime",
+      "short_name": "Shpenzim",
+      "description": "Shto shpenzim te ri",
+      "url": "/shitjet-app/?shortcut=shpenzime",
+      "icons": [{ "src": "/shitjet-app/icon-shortcut-shpenzim.png", "sizes": "96x96" }]
+    }
+  ],
+  "categories": ["business", "finance"],
+  "lang": "sq"
+}
